@@ -1,0 +1,22 @@
+body{margin:0;font:16px/1.6 system-ui,sans-serif;color:#222;background:#fff}
+header{border-bottom:1px solid #ddd;padding:12px 24px}
+header h1{font-size:20px;margin:0 0 8px}
+.tabs{display:flex;gap:4px;flex-wrap:wrap}
+.tabs button{border:0;background:none;padding:6px 14px;font:inherit;cursor:pointer;border-bottom:3px solid transparent}
+.tabs button[aria-current=true]{border-color:#2b4eff;font-weight:700}
+main{max-width:1000px;margin:0 auto;padding:24px}
+h2{margin-top:0}.prose{max-width:70ch}
+.eq{font-family:monospace;background:#f3f5f8;padding:8px 12px;margin:10px 0;overflow-x:auto;white-space:pre}
+.btn{background:#2b4eff;color:#fff;border:0;padding:8px 16px;border-radius:4px;font:inherit;cursor:pointer}
+.btn.alt{background:#fff;color:#222;border:1px solid #bbb}.btn:disabled{opacity:.4}
+.sim{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:20px;align-items:start}
+.panel{border:1px solid #ddd;padding:14px;margin-bottom:14px;border-radius:4px}.panel h3{margin:0 0 10px;font-size:16px}
+.ctl{display:grid;gap:4px;margin-bottom:10px;font-size:14px}.ctl select{padding:5px;font:inherit}
+canvas{width:100%;display:block;border:1px solid #ddd;margin-bottom:8px;cursor:crosshair}
+.stats{font-size:14px;margin:6px 0}
+.tasks{list-style:none;padding:0;margin:0;display:grid;gap:8px;font-size:14px}
+.tasks li{display:grid;grid-template-columns:20px 1fr}.done{color:#0a8a4f;font-weight:700}
+.row{display:flex;gap:8px;margin:10px 0;flex-wrap:wrap}
+.q{border-top:1px solid #ddd;padding:12px 0}.q label{display:block;cursor:pointer}
+.res{font-size:14px;margin-top:4px}.ok{color:#0a8a4f}.bad{color:#c62f3b}.score{font-size:28px;font-weight:700}
+@media(max-width:800px){.sim{grid-template-columns:1fr}main{padding:14px}}
