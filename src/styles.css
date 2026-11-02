@@ -16,6 +16,17 @@ canvas{width:100%;display:block;border:1px solid #ddd;margin-bottom:8px;cursor:c
 .stats{font-size:14px;margin:6px 0}
 .tasks{list-style:none;padding:0;margin:0;display:grid;gap:8px;font-size:14px}
 .tasks li{display:grid;grid-template-columns:20px 1fr}.done{color:#0a8a4f;font-weight:700}
+.task-group{margin-top:12px}.task-group h4{font-size:12px;margin:0 0 6px;color:#5b6b82;text-transform:uppercase;letter-spacing:.04em}
+.loss-tag{font-size:13px;color:#5b6b82;background:#f3f5f8;padding:5px 8px;border-radius:4px;margin-bottom:10px}
+.dataset-desc{font-size:14px;margin:0 0 8px}.dataset-meta{display:block;font-size:12px;color:#5b6b82;margin-top:4px}
+.fit-bar{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;font-size:12px;color:#3a475c;background:#f8fafc;border:1px solid #e3e9f1;border-radius:4px;padding:7px 9px;margin:-2px 0 6px}
+.fit-eq{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-weight:600;color:#14213d}
+.fit-stat{color:#5b6b82}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;font-size:12px;color:#5b6b82;margin:0 0 8px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend .dot{width:8px;height:8px;border-radius:50%;background:rgba(43,78,255,.55);box-shadow:0 0 0 1px #fff,0 0 0 2px rgba(43,78,255,.25)}
+.legend .line{width:18px;height:3px;border-radius:2px;background:#ffb400;box-shadow:0 0 0 1px #14213d}
+.legend-note{margin-left:auto}
 .row{display:flex;gap:8px;margin:10px 0;flex-wrap:wrap}
 .q{border-top:1px solid #ddd;padding:12px 0}.q label{display:block;cursor:pointer}
 .res{font-size:14px;margin-top:4px}.ok{color:#0a8a4f}.bad{color:#c62f3b}.score{font-size:28px;font-weight:700}

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DATASETS, DATASET_MAP } from "./data/datasets.js";
+import { LOSSES, fitMetrics, makeDatasetObjective, simulate } from "./lib/optimize.js";
 
 const FNS = {
   bowl: { name: "Simple bowl: f = x² + y²", f: (x, y) => x * x + y * y, g: (x, y) => [2 * x, 2 * y], opt: [0, 0] },
@@ -18,38 +20,47 @@ const FNS = {
 };
 const OPTS = { gd: "Gradient descent", mom: "Momentum (β = 0.9)", adam: "Adam" };
 
-function simulate(fn, opt, lr, steps, start) {
-  const { f, g } = FNS[fn];
-  let [x, y] = start, vx = 0, vy = 0, mx = 0, my = 0, sx = 0, sy = 0;
-  const path = [{ x, y, l: f(x, y) }];
-  let converged = null, diverged = false;
-  for (let t = 1; t <= steps; t++) {
-    const [gx, gy] = g(x, y);
-    if (Math.hypot(gx, gy) < 0.01 && converged === null) converged = t - 1;
-    let dx, dy;
-    if (opt === "gd") { dx = lr * gx; dy = lr * gy; }
-    else if (opt === "mom") { vx = 0.9 * vx + lr * gx; vy = 0.9 * vy + lr * gy; dx = vx; dy = vy; }
-    else {
-      mx = 0.9 * mx + 0.1 * gx; my = 0.9 * my + 0.1 * gy;
-      sx = 0.999 * sx + 0.001 * gx * gx; sy = 0.999 * sy + 0.001 * gy * gy;
-      const b1 = 1 - 0.9 ** t, b2 = 1 - 0.999 ** t;
-      dx = (lr * (mx / b1)) / (Math.sqrt(sx / b2) + 1e-8);
-      dy = (lr * (my / b1)) / (Math.sqrt(sy / b2) + 1e-8);
-    }
-    x -= dx; y -= dy;
-    const l = f(x, y);
-    path.push({ x, y, l });
-    if (!isFinite(l) || Math.abs(x) > 1e3 || Math.abs(y) > 1e3) { diverged = true; break; }
-  }
-  return { path, converged, diverged, fn, opt, lr, steps, finalLoss: path[path.length - 1].l };
+function niceTicks(min, max, count = 5) {
+  const span = max - min;
+  if (!isFinite(span) || span <= 0) return [min];
+  const raw = span / count;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  const start = Math.ceil(min / step) * step;
+  const ticks = [];
+  for (let v = start; v <= max + step * 1e-9; v += step) ticks.push(v);
+  return ticks;
 }
 
+function fmtTick(v) {
+  const a = Math.abs(v);
+  if (!isFinite(v)) return "—";
+  if (a >= 1000) return Math.round(v).toLocaleString();
+  if (a >= 100) return v.toFixed(0);
+  if (a >= 10) return v.toFixed(1);
+  if (a >= 1) return v.toFixed(2);
+  if (a >= 0.01) return v.toFixed(3);
+  return v.toExponential(1);
+}
+
+function fmtValue(v) {
+  if (!isFinite(v)) return "—";
+  const a = Math.abs(v);
+  if (a >= 1000 || (a > 0 && a < 0.01)) return v.toExponential(2);
+  return Number(v.toFixed(3)).toString();
+}
+
+const TASK_GROUPS = ["Synthetic surfaces", "Real datasets"];
 const TASKS = [
-  { t: "Make it converge. On the simple bowl with gradient descent, run until the gradient is almost zero.", ok: (r) => r.fn === "bowl" && r.opt === "gd" && r.converged !== null },
-  { t: "Break it. On the narrow valley with gradient descent, find a learning rate that makes the loss blow up.", ok: (r) => r.fn === "narrow" && r.opt === "gd" && r.diverged },
-  { t: "Watch it crawl. On the simple bowl, use a learning rate of 0.01 or less and 100 steps or fewer. Is the loss still above 0.01?", ok: (r) => r.fn === "bowl" && r.opt === "gd" && r.lr <= 0.01 && r.steps <= 100 && r.finalLoss > 0.01 },
-  { t: "Fix the valley. On the narrow valley, use Momentum (or Adam with a small rate) to converge where plain gradient descent oscillated.", ok: (r) => r.fn === "narrow" && r.opt !== "gd" && r.converged !== null },
-  { t: "Get trapped. On the bumpy surface with gradient descent, click two different start points and run both. Do they end at different losses?", ok: (_, h) => { const b = h.filter((r) => r.fn === "bumpy" && r.opt === "gd" && !r.diverged); return b.some((p) => b.some((q) => Math.abs(p.finalLoss - q.finalLoss) > 0.1)); } },
+  { g: "Synthetic surfaces", t: "Converge. On the simple bowl with gradient descent, run until the gradient is almost zero.", ok: (r) => r.mode === "synthetic" && r.fn === "bowl" && r.opt === "gd" && r.converged !== null },
+  { g: "Synthetic surfaces", t: "Break it. On the narrow valley with gradient descent, find a learning rate that makes the loss blow up.", ok: (r) => r.mode === "synthetic" && r.fn === "narrow" && r.opt === "gd" && r.diverged },
+  { g: "Synthetic surfaces", t: "Fix the valley. On the narrow valley, use Momentum (or Adam with a small rate) to converge where plain gradient descent oscillated.", ok: (r) => r.mode === "synthetic" && r.fn === "narrow" && r.opt !== "gd" && r.converged !== null },
+  { g: "Synthetic surfaces", t: "Get trapped. On the bumpy surface with gradient descent, click two different start points and run both. Do they end at different losses?", ok: (_, h) => { const b = h.filter((r) => r.mode === "synthetic" && r.fn === "bumpy" && r.opt === "gd" && !r.diverged); return b.some((p) => b.some((q) => Math.abs(p.finalLoss - q.finalLoss) > 0.1)); } },
+  { g: "Real datasets", t: "Fit real data. Pick any real dataset and use gradient descent until it converges.", ok: (r) => r.mode === "dataset" && r.opt === "gd" && r.converged !== null },
+  { g: "Real datasets", t: "Compare optimizers. On the same real dataset and loss, converge with two different optimizers.", ok: (_, h) => { const runs = h.filter((r) => r.mode === "dataset" && r.converged !== null); return runs.some((a) => runs.some((b) => a.datasetId === b.datasetId && a.lossId === b.lossId && a.opt !== b.opt)); } },
+  { g: "Real datasets", t: "Compare datasets. Fit two different datasets with gradient descent and the same loss, and find final standardized slopes that differ by more than 0.2.", ok: (_, h) => { const runs = h.filter((r) => r.mode === "dataset" && r.opt === "gd" && r.converged !== null); return runs.some((a) => runs.some((b) => a.datasetId !== b.datasetId && a.lossId === b.lossId && Math.abs(a.finalW - b.finalW) > 0.2)); } },
+  { g: "Real datasets", t: "Compare losses. On the same real dataset, converge with MSE and with a robust loss (Huber or MAE), then compare the fitted slopes.", ok: (_, h) => { const runs = h.filter((r) => r.mode === "dataset" && r.converged !== null); const mse = runs.filter((r) => r.lossId === "mse"); const robust = runs.filter((r) => r.lossId === "huber" || r.lossId === "mae"); return mse.some((a) => robust.some((b) => a.datasetId === b.datasetId)); } },
 ];
 
 const QUIZ = [
@@ -68,9 +79,9 @@ function Aim() {
   return (
     <div className="prose">
       <h2>Aim</h2>
-      <p>Implement the gradient descent algorithm and study how the learning rate, the shape of the loss surface, and the choice of optimizer affect convergence.</p>
+      <p>Implement the gradient descent algorithm and study how the learning rate, the shape of the loss surface, and the choice of optimizer affect convergence. Then apply the same optimizers to fit linear models to real datasets.</p>
       <h3>Learning outcomes</h3>
-      <p>After this lab you can: (1) write the gradient descent update rule and explain each term; (2) predict whether a learning rate will converge, crawl, or diverge; (3) explain why plain gradient descent struggles in narrow valleys and how momentum and Adam help; (4) explain why the starting point matters on non-convex surfaces.</p>
+      <p>After this lab you can: (1) write the gradient descent update rule and explain each term; (2) predict whether a learning rate will converge, crawl, or diverge; (3) explain why plain gradient descent struggles in narrow valleys and how momentum and Adam help; (4) explain why the starting point matters on non-convex surfaces; (5) fit a linear model to a real dataset and interpret the standardized slope.</p>
       <p>Course outcomes covered: CO1, CO2.</p>
     </div>
   );
@@ -91,6 +102,12 @@ function Theory() {
       <h3>Adam</h3>
       <p>Adam keeps running averages of the gradient (m) and of its square (s), corrects their start-up bias, and divides: each parameter gets its own effective step size.</p>
       <Eq>θ ← θ − η · m̂ / (√ŝ + ε)</Eq>
+      <h3>Fitting a real dataset</h3>
+      <p>For a one-feature linear model ŷ = wx + b, the loss over N examples is plotted as a surface over the two parameters. The default is mean squared error:</p>
+      <Eq>L(w, b) = (1/N) Σ (w·xᵢ + b − yᵢ)²</Eq>
+      <p>Real-data mode standardizes x and y before building this surface, so the learning rate is not dominated by the units of the dataset. In standardized coordinates the MSE-optimal slope is the correlation between x and y, and the best intercept is zero. The scatter preview converts the current line back to the original units.</p>
+      <h3>Robust losses</h3>
+      <p>MSE squares every residual, so a few large errors dominate the fit. Huber loss is quadratic for small residuals but linear for large ones, and MAE uses absolute residuals. Both reduce the influence of outliers, at the cost of a different-shaped surface; MAE is not smooth at zero, so its path may chatter near the minimum. In this lab the loss selector changes the surface, the gradient, and the reported loss, while R² and RMSE remain diagnostics on the raw data.</p>
       <h3>Non-convex surfaces</h3>
       <p>With several minima, gradient descent ends in the basin it starts in. Different starting points can give different answers.</p>
     </div>
@@ -99,10 +116,11 @@ function Theory() {
 
 function Procedure() {
   const steps = [
-    "Open the Simulation tab and choose a loss surface.",
-    "Click on the surface to place the starting point (the white ring).",
-    "Choose an optimizer, a learning rate, and the number of steps.",
-    "Press Run. The path is drawn step by step, and the loss curve updates beneath it.",
+    "Open the Simulation tab and choose a data source: a synthetic loss surface or a real dataset.",
+    "Synthetic mode: choose a loss surface. Real-data mode: choose a dataset and read its description.",
+    "Click on the surface to place the starting point (the white ring). In real-data mode the axes are the standardized slope w and intercept b.",
+    "Choose a loss function in real-data mode, then choose an optimizer, a learning rate, and the number of steps.",
+    "Press Run. The path is drawn step by step, the loss curve updates, and the data preview shows the current regression line.",
     "Read the status line: it reports convergence, divergence, or the loss reached.",
     "Work through the guided tasks in the side panel. A task is ticked when your run meets it.",
     "Change one setting at a time so you can tell which one caused the change.",
@@ -117,7 +135,10 @@ function Procedure() {
 }
 
 function Simulation() {
+  const [mode, setMode] = useState("synthetic");
   const [fn, setFn] = useState("bowl");
+  const [datasetId, setDatasetId] = useState("iris");
+  const [lossId, setLossId] = useState("mse");
   const [opt, setOpt] = useState("gd");
   const [lr, setLr] = useState(0.1);
   const [steps, setSteps] = useState(100);
@@ -126,12 +147,19 @@ function Simulation() {
   const [history, setHistory] = useState([]);
   const [k, setK] = useState(0);
   const [play, setPlay] = useState(false);
-  const surf = useRef(null), curve = useRef(null);
+  const surf = useRef(null), curve = useRef(null), data = useRef(null);
+
+  const dataset = DATASET_MAP[datasetId];
+  const objective = useMemo(() => {
+    if (mode === "dataset") return makeDatasetObjective(dataset, lossId);
+    const f = FNS[fn];
+    return { ...f, kind: "synthetic", labels: { x: "x", y: "y" } };
+  }, [mode, fn, dataset, lossId]);
 
   const heat = useMemo(() => {
     const N = 120, c = document.createElement("canvas");
     c.width = c.height = N;
-    const x = c.getContext("2d"), im = x.createImageData(N, N), { f } = FNS[fn];
+    const x = c.getContext("2d"), im = x.createImageData(N, N), { f } = objective;
     const v = []; let lo = Infinity, hi = -Infinity;
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const val = f(-2 + (4 * i) / (N - 1), 2 - (4 * j) / (N - 1));
@@ -143,7 +171,7 @@ function Simulation() {
     });
     x.putImageData(im, 0, 0);
     return c;
-  }, [fn]);
+  }, [objective]);
 
   useEffect(() => {
     if (!play || !run) return;
@@ -152,10 +180,12 @@ function Simulation() {
   }, [play, run]);
 
   useEffect(() => {
-    const cv = surf.current, W = cv.width, px = (x, y) => [((x + 2) / 4) * W, ((2 - y) / 4) * W];
+    const cv = surf.current;
+    if (!cv) return;
+    const W = cv.width, px = (x, y) => [((x + 2) / 4) * W, ((2 - y) / 4) * W];
     const c = cv.getContext("2d");
     c.drawImage(heat, 0, 0, W, W);
-    const o = FNS[fn].opt;
+    const o = objective.opt;
     if (o) { const [a, b] = px(...o); c.fillStyle = "#0f8a5f"; c.fillRect(a - 5, b - 5, 10, 10); }
     if (run) {
       const pts = run.path.slice(0, k + 1).map((p) => px(p.x, p.y));
@@ -165,7 +195,65 @@ function Simulation() {
     }
     const [sa, sb] = px(...start); c.strokeStyle = "#fff"; c.lineWidth = 3; c.beginPath(); c.arc(sa, sb, 8, 0, 7); c.stroke();
     c.strokeStyle = "#14213d"; c.lineWidth = 1; c.beginPath(); c.arc(sa, sb, 10, 0, 7); c.stroke();
-  }, [heat, run, k, start, fn]);
+  }, [heat, run, k, start, objective]);
+
+  useEffect(() => {
+    if (mode !== "dataset" || !data.current) return;
+    const cv = data.current, c = cv.getContext("2d"), W = cv.width, H = cv.height;
+    const ml = 64, mr = 18, mt = 26, mb = 46;
+    const pw = W - ml - mr, ph = H - mt - mb;
+    c.clearRect(0, 0, W, H); c.fillStyle = "#fbfcfe"; c.fillRect(0, 0, W, H);
+    c.fillStyle = "#fff"; c.fillRect(ml, mt, pw, ph);
+    const pts = dataset.points;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    const padX = (x1 - x0) * 0.04 || 1, padY = (y1 - y0) * 0.08 || 1;
+    x0 -= padX; x1 += padX; y0 -= padY; y1 += padY;
+    const X = (x) => ml + ((x - x0) / (x1 - x0)) * pw;
+    const Y = (y) => H - mb - ((y - y0) / (y1 - y0)) * ph;
+    const xt = niceTicks(x0, x1, 5), yt = niceTicks(y0, y1, 5);
+
+    c.strokeStyle = "#e6ebf2"; c.lineWidth = 1; c.beginPath();
+    xt.forEach((v) => { const x = X(v); c.moveTo(x, mt); c.lineTo(x, mt + ph); });
+    yt.forEach((v) => { const y = Y(v); c.moveTo(ml, y); c.lineTo(ml + pw, y); });
+    c.stroke();
+
+    c.strokeStyle = "#c9d3de"; c.lineWidth = 1; c.strokeRect(ml, mt, pw, ph);
+    c.fillStyle = "#7a879b"; c.font = "11px sans-serif";
+    c.textAlign = "center"; c.textBaseline = "top";
+    xt.forEach((v) => c.fillText(fmtTick(v), X(v), H - mb + 8));
+    c.textAlign = "right"; c.textBaseline = "middle";
+    yt.forEach((v) => c.fillText(fmtTick(v), ml - 8, Y(v)));
+
+    c.fillStyle = "#5b6b82"; c.font = "12px sans-serif"; c.textAlign = "center"; c.textBaseline = "alphabetic";
+    c.fillText(dataset.xLabel, ml + pw / 2, H - 7);
+    c.save(); c.translate(16, mt + ph / 2); c.rotate(-Math.PI / 2); c.fillText(dataset.yLabel, 0, 0); c.restore();
+
+    c.save(); c.beginPath(); c.rect(ml, mt, pw, ph); c.clip();
+    const p = run ? run.path[Math.min(k, run.path.length - 1)] : { x: start[0], y: start[1] };
+    const line = objective.rawLine(p.x, p.y);
+    const pred = (x) => line.slope * x + line.intercept;
+
+    c.strokeStyle = pts.length > 300 ? "rgba(198,47,59,0.10)" : "rgba(198,47,59,0.18)";
+    c.lineWidth = 1; c.beginPath();
+    for (const [x, y] of pts) { const px = X(x); c.moveTo(px, Y(y)); c.lineTo(px, Y(pred(x))); }
+    c.stroke();
+
+    c.beginPath();
+    for (const [x, y] of pts) { const a = X(x), b = Y(y); c.moveTo(a + 2.4, b); c.arc(a, b, 2.4, 0, 7); }
+    c.fillStyle = "rgba(43,78,255,0.52)"; c.fill();
+    c.strokeStyle = "rgba(255,255,255,0.85)"; c.lineWidth = 0.8; c.stroke();
+
+    c.lineJoin = "round"; c.lineCap = "round";
+    c.save();
+    c.shadowColor = "rgba(20,33,61,0.22)"; c.shadowBlur = 7; c.shadowOffsetY = 2;
+    [["#14213d", 6], ["#ffb400", 2.5]].forEach(([col, w]) => {
+      c.strokeStyle = col; c.lineWidth = w; c.beginPath();
+      c.moveTo(X(x0), Y(pred(x0))); c.lineTo(X(x1), Y(pred(x1))); c.stroke();
+    });
+    c.restore();
+    c.restore();
+  }, [mode, dataset, objective, run, k, start]);
 
   useEffect(() => {
     const cv = curve.current, c = cv.getContext("2d"), W = cv.width, H = cv.height;
@@ -179,23 +267,63 @@ function Simulation() {
     ls.slice(0, k + 1).forEach((l, i) => (i ? c.lineTo(X(i), Y(l)) : c.moveTo(X(i), Y(l)))); c.stroke();
   }, [run, k]);
 
+  const clearRun = () => { setRun(null); setPlay(false); setK(0); };
+  const changeMode = (next) => {
+    setMode(next);
+    setStart(next === "dataset" ? dataset.start : [-1.5, 1.5]);
+    clearRun();
+  };
+  const changeDataset = (id) => {
+    setDatasetId(id);
+    setStart(DATASET_MAP[id].start);
+    clearRun();
+  };
   const pick = (e) => {
     const r = e.target.getBoundingClientRect();
     setStart([-2 + (4 * (e.clientX - r.left)) / r.width, 2 - (4 * (e.clientY - r.top)) / r.height]);
-    setRun(null); setPlay(false); setK(0);
+    clearRun();
   };
-  const reset = () => { setRun(null); setPlay(false); setK(0); };
+  const reset = () => {
+    setOpt("gd");
+    setLr(0.1);
+    setSteps(100);
+    if (mode === "dataset") {
+      setDatasetId("iris");
+      setLossId("mse");
+      setStart(DATASET_MAP.iris.start);
+    } else {
+      setFn("bowl");
+      setStart([-1.5, 1.5]);
+    }
+    clearRun();
+  };
   const go = () => {
-    const r = simulate(fn, opt, lr, steps, start), h = [...history, r];
+    const r = simulate(objective, opt, lr, steps, start, {
+      mode,
+      fn: mode === "synthetic" ? fn : null,
+      datasetId: mode === "dataset" ? datasetId : null,
+      lossId: mode === "dataset" ? lossId : null,
+      surface: mode === "synthetic" ? fn : datasetId,
+    });
+    const h = [...history, r];
     setHistory(h); setRun(r); setK(0); setPlay(true);
   };
   const doneTask = (t) => history.some((r) => t.ok(r, history));
+  const doneCount = TASKS.filter(doneTask).length;
   const cur = run ? run.path[Math.min(k, run.path.length - 1)] : null;
   const atEnd = run && k >= run.path.length - 1;
+  const previewParams = cur || { x: start[0], y: start[1] };
+  const previewLine = mode === "dataset" ? objective.rawLine(previewParams.x, previewParams.y) : null;
+  const previewMetrics = mode === "dataset" ? fitMetrics(dataset.points, previewLine) : null;
+  const previewLoss = mode === "dataset" ? objective.f(previewParams.x, previewParams.y) : null;
+  const fitEquation = previewLine
+    ? `y = ${fmtValue(previewLine.slope)}x ${previewLine.intercept >= 0 ? "+" : "−"} ${fmtValue(Math.abs(previewLine.intercept))}`
+    : "";
   let status = "Place a start point, then press Run.";
   if (run) {
     status = `Step ${k}, loss ${cur.l.toExponential(2)}`;
-    if (atEnd) status += run.diverged ? ". Diverged: the loss blew up." : run.converged !== null ? `. Converged: gradient near zero at step ${run.converged}.` : ". Not converged yet. Try more steps or a different rate.";
+    if (mode === "dataset") status += `, w = ${cur.x.toFixed(2)}, b = ${cur.y.toFixed(2)}`;
+    if (atEnd) status += run.diverged ? ". Diverged: the loss blew up." : run.converged !== null ? `. Converged: the gradient (or subgradient) is small at step ${run.converged}.` : ". Not converged yet. Try more steps or a different rate.";
   }
 
   return (
@@ -205,15 +333,47 @@ function Simulation() {
         <div>
           <canvas ref={surf} width={560} height={560} onClick={pick} aria-label="Loss surface. Click to set the start point." />
           <div className="stats" aria-live="polite"><span>{status}</span></div>
+          {mode === "dataset" && (
+            <>
+              <canvas ref={data} width={560} height={280} aria-label="Scatter plot and current regression line" />
+              <div className="fit-bar">
+                <span className="fit-eq">{fitEquation}</span>
+                <span className="fit-stat" title="Loss computed on standardized residuals">{LOSSES[lossId].short} (std.) {fmtValue(previewLoss)}</span>
+                <span className="fit-stat">R² {previewMetrics.r2.toFixed(3)}</span>
+                <span className="fit-stat">RMSE {fmtValue(previewMetrics.rmse)}</span>
+                <span className="fit-stat">n = {previewMetrics.n}</span>
+              </div>
+              <div className="legend">
+                <span><i className="dot" />Data</span>
+                <span><i className="line" />Current fit</span>
+                <span className="legend-note">Red lines show residuals</span>
+              </div>
+            </>
+          )}
           <canvas ref={curve} width={560} height={200} aria-label="Loss versus step" />
         </div>
         <div>
           <div className="panel">
             <h3>Settings</h3>
-            <label className="ctl">Loss surface
-              <select value={fn} onChange={(e) => { setFn(e.target.value); reset(); }}>{Object.entries(FNS).map(([key, v]) => <option key={key} value={key}>{v.name}</option>)}</select></label>
+            <label className="ctl">Data source
+              <select value={mode} onChange={(e) => changeMode(e.target.value)}>
+                <option value="synthetic">Synthetic loss surface</option>
+                <option value="dataset">Real dataset</option>
+              </select></label>
+            {mode === "synthetic" ? (
+              <label className="ctl">Loss surface
+                <select value={fn} onChange={(e) => { setFn(e.target.value); clearRun(); }}>{Object.entries(FNS).map(([key, v]) => <option key={key} value={key}>{v.name}</option>)}</select></label>
+            ) : (
+              <>
+                <label className="ctl">Dataset
+                  <select value={datasetId} onChange={(e) => changeDataset(e.target.value)}>{DATASETS.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
+                <label className="ctl">Loss function
+                  <select value={lossId} onChange={(e) => { setLossId(e.target.value); clearRun(); }}>{Object.entries(LOSSES).map(([key, v]) => <option key={key} value={key}>{v.name}</option>)}</select></label>
+                <div className="loss-tag">{LOSSES[lossId].description}</div>
+              </>
+            )}
             <label className="ctl">Optimizer
-              <select value={opt} onChange={(e) => { setOpt(e.target.value); reset(); }}>{Object.entries(OPTS).map(([key, v]) => <option key={key} value={key}>{v}</option>)}</select></label>
+              <select value={opt} onChange={(e) => { setOpt(e.target.value); clearRun(); }}>{Object.entries(OPTS).map(([key, v]) => <option key={key} value={key}>{v}</option>)}</select></label>
             <label className="ctl">Learning rate η: {lr}
               <input type="range" min="0.001" max="0.5" step="0.001" value={lr} onChange={(e) => setLr(+e.target.value)} /></label>
             <label className="ctl">Steps: {steps}
@@ -223,11 +383,24 @@ function Simulation() {
               <button className="btn alt" onClick={reset}>Reset</button>
               {run && !atEnd && <button className="btn alt" onClick={() => setPlay(!play)}>{play ? "Pause" : "Resume"}</button>}
             </div>
-            <small>Start: ({start[0].toFixed(2)}, {start[1].toFixed(2)}). Adam usually works best with η between 0.01 and 0.1.</small>
+            <small>Start: ({start[0].toFixed(2)}, {start[1].toFixed(2)}). {mode === "dataset" ? "Axes are standardized w and b. For real data, Adam often needs η ≥ 0.02 or more steps." : "Adam usually works best with η between 0.01 and 0.1."}</small>
           </div>
+          {mode === "dataset" && (
+            <div className="panel" style={{ marginTop: 16 }}>
+              <h3>{dataset.name}</h3>
+              <p className="dataset-desc">{dataset.description}</p>
+              <small className="dataset-meta">{dataset.note}. Source: {dataset.source}.</small>
+              <small className="dataset-meta">Surface axes and loss use standardized x/y; R², RMSE, and the preview use raw units.</small>
+            </div>
+          )}
           <div className="panel" style={{ marginTop: 16 }}>
-            <h3>Guided tasks ({TASKS.filter(doneTask).length}/{TASKS.length})</h3>
-            <ul className="tasks">{TASKS.map((t) => <li key={t.t}><span className={doneTask(t) ? "done" : ""}>{doneTask(t) ? "✓" : "○"}</span><span>{t.t}</span></li>)}</ul>
+            <h3>Guided tasks ({doneCount}/{TASKS.length})</h3>
+            {TASK_GROUPS.map((g) => (
+              <div className="task-group" key={g}>
+                <h4>{g}</h4>
+                <ul className="tasks">{TASKS.filter((t) => t.g === g).map((t) => <li key={t.t}><span className={doneTask(t) ? "done" : ""}>{doneTask(t) ? "✓" : "○"}</span><span>{t.t}</span></li>)}</ul>
+              </div>
+            ))}
           </div>
         </div>
       </div>
