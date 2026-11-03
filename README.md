@@ -2,6 +2,10 @@
 
 An interactive React + Vite virtual lab for understanding gradient descent and fitting linear models to real datasets.
 
+## Deployed
+
+https://gradient-descent-virtual-lab-1b8b.vercel.app/
+
 ## Features
 
 ### Synthetic surfaces
